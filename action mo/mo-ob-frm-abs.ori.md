@@ -13,11 +13,11 @@ Please check [mo-ob-frm](./mo-ob-frm.md) for more details.
 ```go
 // 'rootCtx' should be the root context of Server itself.
 rootCtx, err := motrace.Init(
-	motrace.WithContext(context.Background()),
-	motrace.EnableTrace(true),
-	motrace.MOSqlExporter(), // optional: motrace.MOBatchExporter()
-	motrace.WithSampler(mo.NoopSamleper()),
-	motrace.DebugMode(true),		  // painc, if server shutdown with non-Ended span
+	trace.WithContext(context.Background()),
+	trace.EnableTrace(true),
+	trace.MOSqlExporter(), // optional: motrace.MOBatchExporter()
+	trace.WithSampler(trace.NoopSamleper()),
+	trace.DebugMode(true),		  // painc, if server shutdown with non-Ended span
 )
 if err != nil {
 	panic(err)
@@ -29,7 +29,7 @@ if err != nil {
 func ExampleFunc(ctx context.Context) {
 	// Required: 创建一个 span，并记录开始时间
 	//		parentCtx contain TraceId, and new SpanId
-	parentCtx, span := motrace.Start(ctx, "ExampleFunc")
+	parentCtx, span := trace.Start(ctx, "ExampleFunc")
 
   // Function Body: exec something, and must pass new context (parentCtx)
 	ExampleChildFunc(parentCtx)
@@ -40,7 +40,7 @@ func ExampleFunc(ctx context.Context) {
 
 func ExampleChildFunc(ctx context.Context) {
 	// Required: 创建一个 span，并记录开始时间
-	_, span := motrace.Start(ctx, "ExampleChildFunc")
+	_, span := trace.Start(ctx, "ExampleChildFunc")
 
 	// do something ...
 	
@@ -88,7 +88,6 @@ erDiagram
 		host		string
 		statement	string
 		statement_fingerprint		string
-		statement_fingerprint_id	string
 		request_at	datetime
 	}
 	
@@ -120,7 +119,6 @@ erDiagram
 		aggregated_ts	datetime
 		agg_interval	interval
 		fingerprint		string
-		fingerprint_id 	string
 		run_statistics	json
 	}
 ```
@@ -188,6 +186,7 @@ erDiagram
 每个节点完成采集后，各自进行数据的上报，不会存在中心节点汇总上报。
 图中描述的Exporter调用的`MO::BatchWrite`为批量写入接口，是用于分布式部署场景。目前为单点模式，是直接调用SQL接口完成写入。
 整体流程中需要依赖`context.Context`来传递Span的信息，对应有两部分需要进行修改：1）要记录Trace信息的函数，需增加`Context`参数；2）组件之间调用时，协议上需要增加 TraceID（同statement_id） 或 SpanID 等信息。
+（注：图中标记的BatchWrite 为其中一种方案选择，主要用于表达每个节点自行更新数据）
 
 ![[otel-stats.excalidraw|600]]
 
@@ -197,7 +196,7 @@ API的定义沿用 [OpenTelemetry](https://opentelemetry.io/docs/reference/speci
 
 - P0：`context.Context` 传输`TraceID/SpanID/ParentSpanID`等信息
 - P0: ID Generator - crdb 有 FastInt63 @pkg/util/randutil/rand.go:122
-- P0: read sys time - tidb 有 tikv 的高效 tracing
+- P0: read sys time - tidb 有 tikv 的高效 tracing, [minitrace-go](https://github.com/tikv/minitrace-go)
 - P0: BatchProcessor 的 channel 选择和 Exporter 的唤醒策略，[Optimizing OpenTelemetry’s Span Processor for High Throughput and Low CPU Costs](https://doordash.engineering/2021/04/07/optimizing-opentelemetrys-span-processor/)
 - P0: span/log 池管理 - crdb 做一个 pool 减少内存分配
 
@@ -206,19 +205,10 @@ API的定义沿用 [OpenTelemetry](https://opentelemetry.io/docs/reference/speci
 - [Global](https://pkg.go.dev/go.opentelemetry.io/otel)
 
 ```
-func GetTextMapPropagator() propagation.TextMapPropagator
-func GetTracerProvider() trace.TracerProvider							// *
-func Handle(err error)
-func SetErrorHandler(h ErrorHandler)
-func SetLogger(logger logr.Logger)
-func SetTextMapPropagator(propagator propagation.TextMapPropagator)
-func SetTracerProvider(tp trace.TracerProvider)							// *
-func Tracer(name string, opts ...trace.TracerOption) trace.Tracer		// *
-func Version() string													// *
-type ErrorHandler
-	func GetErrorHandler() ErrorHandler
-type ErrorHandlerFunc
-	func (f ErrorHandlerFunc) Handle(err error)
+func GetTracerProvider() trace.TracerProvider
+func SetTracerProvider(tp trace.TracerProvider)
+func Tracer(name string, opts ...trace.TracerOption) trace.Tracer
+func Version() string
 ```
 
 - [Tracer](https://pkg.go.dev/go.opentelemetry.io/otel/trace#Tracer)
@@ -240,35 +230,16 @@ type Span interface {
 	// method has been called.
 	End(options ...SpanEndOption)
 
-	// AddEvent adds an event with the provided name and options.
-	AddEvent(name string, options ...EventOption)
-
 	// IsRecording returns the recording state of the Span. It will return
 	// true if the Span is active and events can be recorded.
 	IsRecording() bool
-
-	// RecordError will record err as an exception span event for this span. An
-	// additional call to SetStatus is required if the Status of the Span should
-	// be set to Error, as this method does not change the Span status. If this
-	// span is not being recorded or err is nil then this method does nothing.
-	RecordError(err error, options ...EventOption)
 
 	// SpanContext returns the SpanContext of the Span. The returned SpanContext
 	// is usable even after the End method has been called for the Span.
 	SpanContext() SpanContext
 
-	// SetStatus sets the status of the Span in the form of a code and a
-	// description, overriding previous values set. The description is only
-	// included in a status when the code is for an error.
-	SetStatus(code codes.Code, description string)
-
 	// SetName sets the Span name.
 	SetName(name string)
-
-	// SetAttributes sets kv as attributes of the Span. If a key from kv
-	// already exists for an attribute of the Span it will be overwritten with
-	// the value contained in kv.
-	SetAttributes(kv ...attribute.KeyValue)
 
 	// TracerProvider returns a TracerProvider that can be used to generate
 	// additional Spans on the same telemetry pipeline as the current Span.
@@ -382,6 +353,8 @@ P1: 预期一个月内完成。
 
 
 
-# TODO
+# 待定/TODO
 1. 分布式后，实现 MOBatchExporter 批处理逻辑
 2. 根据多租户隔离调整库表结构
+3. Error Framework
+4. 表`statement_statistics`定期计算的功能不一定要由DB完成，可以由平台进行定期计算。
