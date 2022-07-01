@@ -203,12 +203,16 @@ erDiagram
 ### Main Flow
 
 `TraceProvider` 统一管理组件的维护，数据采集主要由`Tracer`, `Span`完成，数据上报则由 `Exporter`完成。
+
 每个节点完成采集后，各自进行数据的上报，不会存在中心节点汇总上报。
+
 图中描述的Exporter调用的`MO::BatchWrite`为批量写入接口，是用于分布式部署场景。目前为单点模式，是直接调用SQL接口完成写入。
+
 整体流程中需要依赖`context.Context`来传递Span的信息，对应有两部分需要进行修改：1）要记录Trace信息的函数，需增加`Context`参数；2）组件之间调用时，协议上需要增加 TraceID（同statement_id） 或 SpanID 等信息。
-（注：图中标记的BatchWrite 为其中一种方案选择，主要用于表达每个节点自行更新数据）
+
 
 <img width="600" alt="image" src="https://user-images.githubusercontent.com/3927687/176840006-7c42e3e6-5916-4e57-841c-465ae7f9f0c7.png">
+（注：图中标记的BatchWrite 为其中一种方案选择，主要用于表达每个节点自行上报数据）
 
 ### Interface
 
