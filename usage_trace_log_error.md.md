@@ -21,7 +21,7 @@ Code [pkg/common/moerr](https://github.com/xzxiong/matrixone/blob/trace_testcase
 
 ```
 integer:   10 000
-           __ ___
+           -- ---
       分类编号  递增编号
 ```
 
